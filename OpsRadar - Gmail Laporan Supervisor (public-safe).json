@@ -1,0 +1,822 @@
+{
+  "name": "OpsRadar - Gmail Laporan Supervisor",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "q": "from:rommy2301@gmail.com subject:\"LAPORAN HARIAN\""
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -432,
+        -16
+      ],
+      "id": "7d0418cf-4945-4fb3-93df-d7189607df66",
+      "name": "Gmail Trigger",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "7f4b51c5-094c-4db4-90b3-1654ebd38753",
+              "name": "status",
+              "value": "success",
+              "type": "string"
+            },
+            {
+              "id": "f6051a01-3044-4ab6-83cd-e287d534f28a",
+              "name": "message",
+              "value": "Laporan harian berhasil diproses dan disimpan ke Google Sheets.",
+              "type": "string"
+            },
+            {
+              "id": "e7d0cfb1-0327-436f-91b8-a78b699a69d2",
+              "name": "tanggal",
+              "value": "={{ $json.Tanggal }}",
+              "type": "string"
+            },
+            {
+              "id": "7ae45297-4237-463a-83e5-f6a781f26c8d",
+              "name": "supervisor",
+              "value": "={{ $json.Supervisor }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        464,
+        -32
+      ],
+      "id": "d3b56358-9da4-44bd-9829-305637621cd0",
+      "name": "Success Log"
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "=📩 Laporan harian tanggal {{ $('Extract Report Field').item.json.tanggal }} sudah masuk!\n\n📊 Total produksi: {{ $('Extract Report Field').item.json.total_produksi }} ton\n{{ $('Extract Report Field').item.json.jumlah_macet > 0 ? '⚠️ Ada ' + $('Extract Report Field').item.json.jumlah_macet + ' kejadian macet hari ini' : '✅ Tidak ada kejadian macet hari ini' }}\n{{ $('Extract Report Field').item.json.jumlah_tamu > 0 ? '👤 Ada ' + $('Extract Report Field').item.json.jumlah_tamu + ' tamu tercatat hari ini' : '👤 Tidak ada tamu hari ini' }}\n\nKetik pertanyaan di bot ini untuk lihat detail lengkapnya bos (contoh: \"cek laporan hari ini\")",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        656,
+        -32
+      ],
+      "id": "abfb9246-3aa1-489e-98b5-2de95d927a25",
+      "name": "Send a text message",
+      "webhookId": "a592a50a-4a0d-4e07-8cda-50f7e76e8e7c",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "OpsRadar Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const email = $input.first().json;\nconst body = email.text || email.snippet || '';\n\nfunction extractFrom(text, pattern, fallback = '') {\n  const match = text.match(pattern);\n  return match ? match[1].trim() : fallback;\n}\n\n// Perbaikan: sekarang bisa baca SEMUA gaya penulisan angka:\n// \"9,5\" (koma sebagai desimal) → 9.5\n// \"1.234,5\" (titik ribuan + koma desimal, gaya Indonesia) → 1234.5\n// \"1,234.5\" (koma ribuan + titik desimal, gaya Inggris) → 1234.5\n// \"125\" (angka biasa tanpa koma/titik) → 125\nfunction bersihkanAngka(teksAngka) {\n  let teks = teksAngka.trim();\n  const posisiKoma = teks.lastIndexOf(',');\n  const posisiTitik = teks.lastIndexOf('.');\n\n  if (posisiKoma === -1 && posisiTitik === -1) {\n    return teks; // tidak ada koma/titik, angka biasa\n  }\n\n  if (posisiKoma > posisiTitik) {\n    // koma muncul PALING TERAKHIR → koma ini yang jadi tanda desimal\n    // titik-titik sebelumnya (kalau ada) itu cuma pemisah ribuan, buang\n    teks = teks.replace(/\\./g, '');\n    teks = teks.replace(',', '.');\n  } else {\n    // titik muncul PALING TERAKHIR → titik ini yang jadi tanda desimal\n    // koma-koma sebelumnya (kalau ada) itu cuma pemisah ribuan, buang\n    teks = teks.replace(/,/g, '');\n  }\n  return teks;\n}\n\nfunction extractNumberFrom(text, pattern, fallback = 0) {\n  const value = extractFrom(text, pattern, '');\n  const bersih = bersihkanAngka(value);\n  const num = parseFloat(bersih);\n  return isNaN(num) ? fallback : num;\n}\n\nfunction getSection(startMarker, endMarker) {\n  const startIdx = body.indexOf(startMarker);\n  if (startIdx === -1) return '';\n  const afterStart = body.slice(startIdx + startMarker.length);\n  if (!endMarker) return afterStart;\n  const endIdx = afterStart.indexOf(endMarker);\n  return endIdx === -1 ? afterStart : afterStart.slice(0, endIdx);\n}\n\nfunction extractMaterial(text, nama) {\n  const pattern = new RegExp(nama.replace(/-/g, '\\\\-') + '\\\\s*:\\\\s*([\\\\d.,]+)', 'i');\n  return extractNumberFrom(text, pattern);\n}\n\nfunction hitungBarisData(sectionText) {\n  const teks = sectionText.trim();\n  if (!teks || /^NIHIL/i.test(teks)) return 0;\n  const cocok = teks.match(/(?:^|\\n)\\s*\\d+\\s*\\|/g);\n  return cocok ? cocok.length : 0;\n}\n\nconst bagianAtas = getSection('', '--- KONDISI MESIN ---');\nconst bagianMesin = getSection('--- KONDISI MESIN ---', '--- JAM OPERASIONAL ---');\nconst bagianJam = getSection('--- JAM OPERASIONAL ---', '--- MATERIAL MASUK ---');\nconst bagianMasuk = getSection('--- MATERIAL MASUK ---', '--- PRODUKSI HARI INI ---');\nconst bagianProduksi = getSection('--- PRODUKSI HARI INI ---', '--- MATERIAL KELUAR');\nconst bagianKeluar = getSection('--- MATERIAL KELUAR', '--- DOWNTIME ---');\nconst bagianDowntime = getSection('--- DOWNTIME ---', '--- STOK BAHAN BAKAR ---');\nconst bagianSolar = getSection('--- STOK BAHAN BAKAR ---', '--- INVENTARIS');\nconst bagianInventaris = getSection('--- INVENTARIS DIBUTUHKAN ---', '--- ABSENSI');\nconst bagianAbsensi = getSection('--- ABSENSI KARYAWAN ---', '--- INFORMASI TAMBAHAN');\nconst bagianInfoTambahan = getSection('--- INFORMASI TAMBAHAN ---', '--- TAMU ---');\nconst bagianTamu = getSection('--- TAMU ---', '');\n\nconst tanggal = extractFrom(bagianAtas, /Tanggal\\s*:\\s*([\\d-]+)/i);\nconst supervisor = extractFrom(bagianAtas, /Supervisor\\s*:\\s*(.+)/i);\nconst dataValid = (tanggal !== '' && supervisor !== '');\n\nreturn [\n  {\n    json: {\n      data_valid: dataValid,\n      tanggal: tanggal,\n      supervisor: supervisor,\n      kondisi_awal: extractFrom(bagianMesin, /Kondisi awal\\s*:\\s*(.+)/i),\n      status_akhir: extractFrom(bagianMesin, /Status akhir\\s*:\\s*(.+)/i),\n      jam_mulai: extractFrom(bagianJam, /Mulai\\s*:\\s*([\\d:]+)/i),\n      jam_selesai: extractFrom(bagianJam, /Selesai\\s*:\\s*([\\d:]+)/i),\n      total_jam: extractNumberFrom(bagianJam, /Total\\s*:\\s*([\\d.,]+)/i),\n      material_masuk: extractNumberFrom(bagianMasuk, /Total material masuk\\s*:\\s*([\\d.,]+)/i),\n      produksi_batu58: extractMaterial(bagianProduksi, 'Batu 5-8'),\n      produksi_suplit12: extractMaterial(bagianProduksi, 'Suplit 1-2'),\n      produksi_suplit23: extractMaterial(bagianProduksi, 'Suplit 2-3'),\n      produksi_batumedium: extractMaterial(bagianProduksi, 'Batu Medium'),\n      produksi_abubatu: extractMaterial(bagianProduksi, 'Abu Batu'),\n      produksi_limbah: extractMaterial(bagianProduksi, 'Limbah'),\n      total_produksi: extractNumberFrom(bagianProduksi, /TOTAL PRODUKSI\\s*:\\s*([\\d.,]+)/i),\n      keluar_batu58: extractMaterial(bagianKeluar, 'Batu 5-8'),\n      keluar_suplit12: extractMaterial(bagianKeluar, 'Suplit 1-2'),\n      keluar_suplit23: extractMaterial(bagianKeluar, 'Suplit 2-3'),\n      keluar_batumedium: extractMaterial(bagianKeluar, 'Batu Medium'),\n      keluar_abubatu: extractMaterial(bagianKeluar, 'Abu Batu'),\n      keluar_limbah: extractMaterial(bagianKeluar, 'Limbah'),\n      total_keluar: extractNumberFrom(bagianKeluar, /TOTAL KELUAR\\s*:\\s*([\\d.,]+)/i),\n      stok_solar: extractNumberFrom(bagianSolar, /Solar\\s*:\\s*([\\d.,]+)/i),\n      jumlah_macet: hitungBarisData(bagianDowntime),\n      jumlah_tamu: hitungBarisData(bagianTamu),\n      inventaris: bagianInventaris.trim() || 'NIHIL',\n      absensi: bagianAbsensi.trim() || 'NIHIL',\n      info_tambahan: bagianInfoTambahan.trim() || 'NIHIL',\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -208,
+        -16
+      ],
+      "id": "fcbc703d-fa23-4bda-ac34-2f07d0ebb504",
+      "name": "Extract Report Field"
+    },
+    {
+      "parameters": {
+        "jsCode": "const email = $input.first().json;\nconst body = email.text || email.snippet || '';\n\nfunction getSection(startMarker, endMarker) {\n  const startIdx = body.indexOf(startMarker);\n  if (startIdx === -1) return '';\n  const afterStart = body.slice(startIdx + startMarker.length);\n  if (!endMarker) return afterStart;\n  const endIdx = afterStart.indexOf(endMarker);\n  return endIdx === -1 ? afterStart : afterStart.slice(0, endIdx);\n}\n\nfunction extractFrom(text, pattern, fallback = '') {\n  const match = text.match(pattern);\n  return match ? match[1].trim() : fallback;\n}\n\nfunction parsePipeRecords(sectionText) {\n  const teks = sectionText.trim();\n  if (!teks || /^NIHIL/i.test(teks)) return [];\n\n  const posisiAwal = [];\n  const pola = /(?:^|\\n)\\s*\\d+\\s*\\|/g;\n  let cocok;\n  while ((cocok = pola.exec(teks)) !== null) {\n    const mulaiDariAngka = cocok[0].startsWith('\\n') ? cocok.index + 1 : cocok.index;\n    posisiAwal.push(mulaiDariAngka);\n  }\n\n  const hasil = [];\n  for (let i = 0; i < posisiAwal.length; i++) {\n    const mulai = posisiAwal[i];\n    const akhir = i + 1 < posisiAwal.length ? posisiAwal[i + 1] : teks.length;\n    let satuData = teks.slice(mulai, akhir).trim();\n    satuData = satuData.replace(/\\s*\\n\\s*/g, ' ');\n    hasil.push(satuData);\n  }\n  return hasil;\n}\n\nconst bagianAtas = getSection('', '--- KONDISI MESIN ---');\nconst tanggal = extractFrom(bagianAtas, /Tanggal\\s*:\\s*([\\d-]+)/i);\n\nconst bagianDowntime = getSection('--- DOWNTIME ---', '--- STOK BAHAN BAKAR ---');\nconst daftarData = parsePipeRecords(bagianDowntime);\n\n// Perbaikan: baris yang datanya kurang dari 5 bagian (nomor, waktu,\n// penyebab, durasi, bagian mesin) akan DILEWATI, tidak masuk ke Sheets\nconst hasilItems = [];\nfor (const satuBaris of daftarData) {\n  const kolom = satuBaris.split('|').map(k => k.trim());\n  if (kolom.length < 5 || !kolom[1] || !kolom[2] || !kolom[4]) {\n    continue; // data tidak lengkap, lewati baris ini\n  }\n  hasilItems.push({\n    json: {\n      tanggal: tanggal,\n      waktu_kejadian: kolom[1],\n      penyebab: kolom[2],\n      durasi: parseFloat(kolom[3].replace(',', '.')) || 0,\n      bagian_mesin: kolom[4],\n      status: 'SELESAI'\n    }\n  });\n}\n\nreturn hasilItems;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -208,
+        176
+      ],
+      "id": "bd41acf8-8f51-42af-89d1-b65b0767c00c",
+      "name": "Extract Downtime Entries"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "OpsRadar - Stone Crusher Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 828721995,
+          "mode": "list",
+          "cachedResultName": "Downtime Log",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=828721995"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Tanggal": "={{ $json.tanggal }}",
+            "Waktu Kejadian": "={{ $json.waktu_kejadian }}",
+            "Durasi (menit)": "={{ $json.durasi }}",
+            "Penyebab": "={{ $json.penyebab }}",
+            "Bagian Mesin": "={{ $json.bagian_mesin }}",
+            "Status": "={{ $json.status }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Tanggal",
+              "displayName": "Tanggal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Waktu Kejadian",
+              "displayName": "Waktu Kejadian",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Durasi (menit)",
+              "displayName": "Durasi (menit)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Penyebab",
+              "displayName": "Penyebab",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Bagian Mesin",
+              "displayName": "Bagian Mesin",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        0,
+        176
+      ],
+      "id": "67f834d7-f36d-42ef-add7-f7bd2fe741d2",
+      "name": "Append Downtime Log",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const email = $input.first().json;\nconst body = email.text || email.snippet || '';\n\nfunction getSection(startMarker, endMarker) {\n  const startIdx = body.indexOf(startMarker);\n  if (startIdx === -1) return '';\n  const afterStart = body.slice(startIdx + startMarker.length);\n  if (!endMarker) return afterStart;\n  const endIdx = afterStart.indexOf(endMarker);\n  return endIdx === -1 ? afterStart : afterStart.slice(0, endIdx);\n}\n\nfunction extractFrom(text, pattern, fallback = '') {\n  const match = text.match(pattern);\n  return match ? match[1].trim() : fallback;\n}\n\nfunction parsePipeRecords(sectionText) {\n  const teks = sectionText.trim();\n  if (!teks || /^NIHIL/i.test(teks)) return [];\n\n  const posisiAwal = [];\n  const pola = /(?:^|\\n)\\s*\\d+\\s*\\|/g;\n  let cocok;\n  while ((cocok = pola.exec(teks)) !== null) {\n    const mulaiDariAngka = cocok[0].startsWith('\\n') ? cocok.index + 1 : cocok.index;\n    posisiAwal.push(mulaiDariAngka);\n  }\n\n  const hasil = [];\n  for (let i = 0; i < posisiAwal.length; i++) {\n    const mulai = posisiAwal[i];\n    const akhir = i + 1 < posisiAwal.length ? posisiAwal[i + 1] : teks.length;\n    let satuData = teks.slice(mulai, akhir).trim();\n    satuData = satuData.replace(/\\s*\\n\\s*/g, ' ');\n    hasil.push(satuData);\n  }\n  return hasil;\n}\n\nconst bagianAtas = getSection('', '--- KONDISI MESIN ---');\nconst tanggal = extractFrom(bagianAtas, /Tanggal\\s*:\\s*([\\d-]+)/i);\n\nconst bagianTamu = getSection('--- TAMU ---', '');\nconst daftarData = parsePipeRecords(bagianTamu);\n\n// Perbaikan: baris yang datanya kurang dari 4 bagian penting\n// (nomor, jenis tamu, nama, instansi) akan DILEWATI\nconst hasilItems = [];\nfor (const satuBaris of daftarData) {\n  const kolom = satuBaris.split('|').map(k => k.trim());\n  if (kolom.length < 4 || !kolom[1] || !kolom[2]) {\n    continue; // data tidak lengkap, lewati baris ini\n  }\n  hasilItems.push({\n    json: {\n      tanggal: tanggal,\n      jenis_tamu: kolom[1],\n      nama: kolom[2],\n      instansi: kolom[3] || '',\n      keperluan: kolom[4] || '',\n      material_diminati: kolom[5] || '',\n      no_hp: kolom[6] || '',\n      status_follow_up: 'BELUM'\n    }\n  });\n}\n\nreturn hasilItems;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -208,
+        -208
+      ],
+      "id": "64f47d82-4e13-489b-a761-bd6b53210c23",
+      "name": "Extract Lead Buyer Entries"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "OpsRadar - Stone Crusher Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1256323578,
+          "mode": "list",
+          "cachedResultName": "Lead Buyer",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=1256323578"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Tanggal": "={{ $json.tanggal }}",
+            "Jenis Tamu": "={{ $json.jenis_tamu }}",
+            "Nama": "={{ $json.nama }}",
+            "Instansi / Perusahaan": "={{ $json.instansi }}",
+            "Keperluan": "={{ $json.keperluan }}",
+            "Material Diminati": "={{ $json.material_diminati }}",
+            "No. HP": "={{ $json.no_hp }}",
+            "Status Follow Up": "={{ $json.status_follow_up }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Tanggal",
+              "displayName": "Tanggal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Jenis Tamu",
+              "displayName": "Jenis Tamu",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Nama",
+              "displayName": "Nama",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Instansi / Perusahaan",
+              "displayName": "Instansi / Perusahaan",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Keperluan",
+              "displayName": "Keperluan",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Material Diminati",
+              "displayName": "Material Diminati",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "No. HP",
+              "displayName": "No. HP",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status Follow Up",
+              "displayName": "Status Follow Up",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        0,
+        -208
+      ],
+      "id": "25f353e0-1edc-4d0f-a890-552923a7e133",
+      "name": "Append Lead Buyer",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "OpsRadar - Stone Crusher Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Laporan Harian",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Tanggal": "={{ $json.tanggal }}",
+            "Supervisor": "={{ $json.supervisor }}",
+            "Kondisi Mesin Awal": "={{ $json.kondisi_awal }}",
+            "Status Mesin Akhir": "={{ $json.status_akhir }}",
+            "Jam Mulai": "={{ $json.jam_mulai }}",
+            "Jam Selesai": "={{ $json.jam_selesai }}",
+            "Total Jam Operasional": "={{ $json.total_jam }}",
+            "Material Masuk (ton)": "={{ $json.material_masuk }}",
+            "Produksi Batu 5-8 (ton)": "={{ $json.produksi_batu58 }}",
+            "Produksi Suplit 1-2 (ton)": "={{ $json.produksi_suplit12 }}",
+            "Produksi Suplit 2-3 (ton)": "={{ $json.produksi_suplit23 }}",
+            "Produksi Batu Medium (ton)": "={{ $json.produksi_batumedium }}",
+            "Produksi Abu Batu (ton)": "={{ $json.produksi_abubatu }}",
+            "Produksi Limbah (ton)": "={{ $json.produksi_limbah }}",
+            "Total Produksi (ton)": "={{ $json.total_produksi }}",
+            "Keluar Batu 5-8 (ton)": "={{ $json.keluar_batu58 }}",
+            "Keluar Suplit 1-2 (ton)": "={{ $json.keluar_suplit12 }}",
+            "Keluar Suplit 2-3 (ton)": "={{ $json.keluar_suplit23 }}",
+            "Keluar Batu Medium (ton)": "={{ $json.keluar_batumedium }}",
+            "Keluar Abu Batu (ton)": "={{ $json.keluar_abubatu }}",
+            "Keluar Limbah (ton)": "={{ $json.keluar_limbah }}",
+            "Total Keluar (ton)": "={{ $json.total_keluar }}",
+            "Stok Solar (liter)": "={{ $json.stok_solar }}",
+            "Jumlah Macet (kali)": "={{ $json.jumlah_macet }}",
+            "Inventaris Dibutuhkan": "={{ $json.inventaris }}",
+            "Absensi": "={{ $json.absensi }}",
+            "Informasi Tambahan": "={{ $json.info_tambahan }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Tanggal",
+              "displayName": "Tanggal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Supervisor",
+              "displayName": "Supervisor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Kondisi Mesin Awal",
+              "displayName": "Kondisi Mesin Awal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status Mesin Akhir",
+              "displayName": "Status Mesin Akhir",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Jam Mulai",
+              "displayName": "Jam Mulai",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Jam Selesai",
+              "displayName": "Jam Selesai",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Total Jam Operasional",
+              "displayName": "Total Jam Operasional",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Material Masuk (ton)",
+              "displayName": "Material Masuk (ton)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Produksi Batu 5-8 (ton)",
+              "displayName": "Produksi Batu 5-8 (ton)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Produksi Suplit 1-2 (ton)",
+              "displayName": "Produksi Suplit 1-2 (ton)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Produksi Suplit 2-3 (ton)",
+              "displayName": "Produksi Suplit 2-3 (ton)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Produksi Batu Medium (ton)",
+              "displayName": "Produksi Batu Medium (ton)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Produksi Abu Batu (ton)",
+              "displayName": "Produksi Abu Batu (ton)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Produksi Limbah (ton)",
+              "displayName": "Produksi Limbah (ton)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Total Produksi (ton)",
+              "displayName": "Total Produksi (ton)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Keluar Batu 5-8 (ton)",
+              "displayName": "Keluar Batu 5-8 (ton)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Keluar Suplit 1-2 (ton)",
+              "displayName": "Keluar Suplit 1-2 (ton)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Keluar Suplit 2-3 (ton)",
+              "displayName": "Keluar Suplit 2-3 (ton)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Keluar Batu Medium (ton)",
+              "displayName": "Keluar Batu Medium (ton)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Keluar Abu Batu (ton)",
+              "displayName": "Keluar Abu Batu (ton)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Keluar Limbah (ton)",
+              "displayName": "Keluar Limbah (ton)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Total Keluar (ton)",
+              "displayName": "Total Keluar (ton)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Stok Solar (liter)",
+              "displayName": "Stok Solar (liter)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Jumlah Macet (kali)",
+              "displayName": "Jumlah Macet (kali)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Inventaris Dibutuhkan",
+              "displayName": "Inventaris Dibutuhkan",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Absensi",
+              "displayName": "Absensi",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Informasi Tambahan",
+              "displayName": "Informasi Tambahan",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        256,
+        -32
+      ],
+      "id": "85856ce4-9e27-4778-83a2-917e3aca3b5e",
+      "name": "Append Laporan Harian in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ba4a9acf-da81-423a-b971-55aad5b96746",
+              "leftValue": "={{ $json.data_valid }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        0,
+        -16
+      ],
+      "id": "813a9a29-eca3-4f82-929e-b0a3e743f367",
+      "name": "IF Report Data Valid ?"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract Report Field",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Extract Downtime Entries",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Extract Lead Buyer Entries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Success Log": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Report Field": {
+      "main": [
+        [
+          {
+            "node": "IF Report Data Valid ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Downtime Entries": {
+      "main": [
+        [
+          {
+            "node": "Append Downtime Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Lead Buyer Entries": {
+      "main": [
+        [
+          {
+            "node": "Append Lead Buyer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append Laporan Harian in sheet": {
+      "main": [
+        [
+          {
+            "node": "Success Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Report Data Valid ?": {
+      "main": [
+        [
+          {
+            "node": "Append Laporan Harian in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "timezone": "Asia/Makassar",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "86c957f5-e374-4135-a865-c6a09231427e",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "YOUR_N8N_INSTANCE_ID"
+  },
+  "nodeGroups": [],
+  "id": "A4QNRpb9TaFyVy4e",
+  "tags": []
+}
